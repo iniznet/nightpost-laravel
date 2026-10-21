@@ -6,7 +6,7 @@ queries, job/command telemetry and the monitor log channel from any Laravel
 11/12 app. Nothing here can block or break a request — every sender is OFF
 until the operator switches it on via env.
 
-MIT licensed. The server it ships to is Apache-2.0 (iniznet/nightpost).
+MIT licensed. The server it ships to is AGPL-3.0 (iniznet/nightpost).
 
 ## Install
 

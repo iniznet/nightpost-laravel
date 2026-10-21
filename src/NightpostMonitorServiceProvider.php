@@ -2,15 +2,15 @@
 
 namespace Nightpost\Laravel;
 
-use IlluminateConsoleEventsCommandFinished;
-use IlluminateConsoleEventsCommandStarting;
-use IlluminateDatabaseEventsQueryExecuted;
-use IlluminateQueueEventsJobFailed;
-use IlluminateQueueEventsJobProcessing;
-use IlluminateQueueEventsJobProcessed;
-use IlluminateQueueEventsWorkerStopping;
-use IlluminateSupportFacadesDB;
-use IlluminateSupportFacadesEvent;
+use Illuminate\Console\Events\CommandFinished;
+use Illuminate\Console\Events\CommandStarting;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessing;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\WorkerStopping;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Nightpost\Laravel\Monitor\JobCapture;
 use Nightpost\Laravel\Monitor\MonitorClient;
 use Nightpost\Laravel\Monitor\ProfileSender;

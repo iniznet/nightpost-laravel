@@ -89,7 +89,7 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
      * fire, compares CUMULATIVE duration, and calls the handler as
      * ($connection, $event).
      */
-    protected function registerSlowQueryCapture(): void
+    public function registerSlowQueryCapture(): void
     {
         $slowQueryMs = (int) config('monitor.slow_query_ms', 0);
         if (! config('monitor.enabled') || $slowQueryMs <= 0) {
@@ -111,7 +111,7 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
      * queue successes batch per (kind|name) over a window, and WorkerStopping
      * flushes the tail.
      */
-    protected function registerJobCapture(): void
+    public function registerJobCapture(): void
     {
         if (! config('monitor.enabled') || ! config('monitor.job_capture')) {
             return;

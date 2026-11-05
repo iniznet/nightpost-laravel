@@ -28,9 +28,9 @@ The service provider auto-discovers. Configure the senders you want:
 | SENTRY_LARAVEL_DSN | Sentry-SDK exception stream (stays key-less — the /api/1 bucket must stay unsigned) |
 | PROFILER_ENDPOINT | xhprof extension endpoint; the key travels as the URL password |
 
-Dual-read (iniznet/fenrirealm-tracker#278 §3): every variable also resolves
-under its legacy MONITOR_* name — NIGHTPOST_* wins, MONITOR_* keeps working,
-so an existing install never needs a coordinated env cutover.
+One namespace (iniznet/fenrirealm-tracker#564): every variable resolves under
+NIGHTPOST_* only. The MONITOR_* fallback was removed in 0.2.0, so rename the
+env before you deploy this version — until then every sender stays OFF.
 
 ## Monitor log channel
 

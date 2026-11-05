@@ -6,9 +6,9 @@ namespace Nightpost\Laravel\Monitor;
  * Resolves the xhprof/spiral-profiler ingest URL (iniznet/fenrirealm-tracker#164).
  *
  * The profiler's project key travels as the URL user component, so
- * PROFILER_ENDPOINT and MONITOR_PROJECT_KEY were two independent places to name
- * the same project — and they drifted (profiles landed under `backend` while
- * monitor clients used the configured key). MONITOR_PROJECT_KEY is the single
+ * PROFILER_ENDPOINT and NIGHTPOST_PROJECT_KEY were two independent places to
+ * name the same project — and they drifted (profiles landed under `backend`
+ * while monitor clients used the configured key). NIGHTPOST_PROJECT_KEY is the single
  * source of truth: the user component is rewritten to it on every resolution.
  */
 final class ProfilerEndpoint

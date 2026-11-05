@@ -10,7 +10,7 @@ use NightpostTests\TestCase;
 
 /**
  * Guards the #145 sampled code-attribution gate inside isEnabled():
- * header > MONITOR_PROFILE_RATE sampling > blanket xhprof.enabled.
+ * header > NIGHTPOST_PROFILE_RATE sampling > blanket xhprof.enabled.
  *
  * isEnabled() is exercised via reflection (not create()) so the test does not
  * require the xhprof PHP extension: an enabled decision would otherwise throw

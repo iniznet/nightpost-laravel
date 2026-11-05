@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * #164: the profiler's project key travels as the URL user component, so the
- * endpoint must resolve through MONITOR_PROJECT_KEY instead of being trusted
+ * endpoint must resolve through NIGHTPOST_PROJECT_KEY instead of being trusted
  * verbatim — that drift is what put profiles in a different dashboard bucket
  * than the rest of the backend's telemetry.
  */

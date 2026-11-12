@@ -25,6 +25,10 @@ The service provider auto-discovers. Configure the senders you want:
 | NIGHTPOST_SLOW_QUERY_MS | slow-query capture threshold; 0 (default) = off |
 | NIGHTPOST_JOB_CAPTURE | job/command telemetry; off by default, zero overhead when off |
 | NIGHTPOST_JOB_PROFILE_SECONDS | per-run trace enrolment threshold (#203); 0 = off |
+| NIGHTPOST_SERVICE | the service name every payload reports as (default: APP_NAME slug) |
+| NIGHTPOST_RELEASE | release marker shipped with each session beacon |
+| NIGHTPOST_SESSION_BEACON | session outcome beacon; needs a session driver, off by default |
+| NIGHTPOST_SPANS | child spans (db, redis, outbound HTTP) on request profiles; off by default |
 | SENTRY_LARAVEL_DSN | Sentry-SDK exception stream (stays key-less — the /api/1 bucket must stay unsigned) |
 | PROFILER_ENDPOINT | xhprof extension endpoint; the key travels as the URL password |
 
@@ -56,8 +60,32 @@ Nightpost\Laravel\Monitor\MonitorClient::postError() ships a first-party
 error report (non-Sentry capture paths). Resolve it from the container; the
 Sentry SDK keeps handling unhandled exceptions.
 
+## Journeys (v2)
+
+The v2 additions are optional fields on the routes above, so a payload that
+sets none of them is still a valid v1 payload.
+
+- **Identity.** Every payload carries `service` (NIGHTPOST_SERVICE, default the
+  APP_NAME slug) and `env` (the running app environment).
+- **traceparent.** A valid inbound `00-<32 hex>-<16 hex>-01` traceparent is
+  adopted: the trace id is kept, this request gets its own span id, and the
+  caller's span id becomes its parent. Missing or malformed is minted. The
+  profile ships the context as `traceparent` + `span_id` and the same header
+  is echoed on the HTTP response.
+- **spans[]** (NIGHTPOST_SPANS): one aggregated span for database work, one for
+  Redis when the connection was used, one per outbound HTTP client call with
+  `peer_service` set to the target host. `start_ms` is an offset from the
+  request start, never a wall clock.
+- **Session beacon** (NIGHTPOST_SESSION_BEACON): POST
+  /ingest/{project}/session with the framework session id, the route pattern,
+  the release and the duration. A request without a session is skipped; a 5xx
+  response reports `abnormal`.
+- **Scheduled runs.** A scheduled task's /job row gains `schedule_cron`,
+  `next_expected_at` (unix seconds, from the scheduler's own next-run
+  calculation) and `grace_seconds` (the overlap window, 0 when unguarded).
+
 ## The wire is frozen
 
-Every route this package POSTs (/ingest/{project}/profile|error|query|job,
+Every route this package POSTs (/ingest/{project}/profile|error|query|job|session,
 /api/profiler/store, TCP 9913) is a compat-locked contract of WIRE_SPEC.md in
 the monitor repo — additive-only.

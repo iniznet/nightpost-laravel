@@ -4,17 +4,31 @@ namespace Nightpost\Laravel;
 
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
+use Illuminate\Console\Events\ScheduledTaskFailed;
+use Illuminate\Console\Events\ScheduledTaskFinished;
+use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Http\Client\Events\ConnectionFailed;
+use Illuminate\Http\Client\Events\RequestSending;
+use Illuminate\Http\Client\Events\ResponseReceived;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\WorkerStopping;
+use Illuminate\Redis\Events\CommandExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Nightpost\Laravel\Monitor\JobCapture;
 use Nightpost\Laravel\Monitor\MonitorClient;
 use Nightpost\Laravel\Monitor\ProfileSender;
+use Nightpost\Laravel\Monitor\SchedulePromise;
+use Nightpost\Laravel\Monitor\ServiceIdentity;
+use Nightpost\Laravel\Monitor\SessionBeacon;
+use Nightpost\Laravel\Monitor\SessionBeaconMiddleware;
 use Nightpost\Laravel\Monitor\SlowQueryCapture;
+use Nightpost\Laravel\Monitor\SpanCollector;
+use Nightpost\Laravel\Monitor\TraceContext;
+use Nightpost\Laravel\Monitor\TraceContextMiddleware;
 use SpiralPackages\Profiler\Profiler;
 
 /**
@@ -38,6 +52,23 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
             return (new \Nightpost\Laravel\Profiler\TaggedProfilerFactory($app['config'], $app['request']))->create();
         });
 
+        // Producer identity (v2): one service name per deployment, defaulting
+        // to the app name slug, plus the running environment.
+        $this->app->singleton(ServiceIdentity::class, function (\Illuminate\Foundation\Application $app) {
+            return ServiceIdentity::fromConfig(
+                (array) ($app['config']['monitor'] ?? []),
+                (string) $app['config']->get('app.name', ''),
+                $app->environment(),
+            );
+        });
+
+        // Trace context and child spans are per request/per job, never shared
+        // across an Octane worker's requests.
+        $this->app->scoped(TraceContext::class, static fn (): TraceContext => new TraceContext);
+        $this->app->scoped(SpanCollector::class, static function (\Illuminate\Foundation\Application $app): SpanCollector {
+            return new SpanCollector($app->make(TraceContext::class));
+        });
+
         // Monitor profile sender: resolve endpoint + project key once per
         // worker (singleton), never per request.
         $this->app->singleton(MonitorClient::class, function (\Illuminate\Foundation\Application $app) {
@@ -48,6 +79,11 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
                 $config['project_key'] ?? 'backend',
                 300,
                 (string) ($config['ingest_key'] ?? ''),
+                $app->make(ServiceIdentity::class),
+                // Resolved lazily: the collector is scoped, the client is a
+                // singleton, and a captured instance would leak one request's
+                // spans into the next.
+                static fn (array $payload): array => $app->make(SpanCollector::class)->attach($payload),
             );
         });
         // Interface alias kept for every existing ProfileSender consumer
@@ -61,6 +97,15 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
                 $app->make(MonitorClient::class),
                 (float) ($config['slow_query_ms'] ?? 0),
                 (string) config('app.env', 'production'),
+            );
+        });
+
+        $this->app->singleton(SessionBeacon::class, function (\Illuminate\Foundation\Application $app) {
+            $config = $app['config']['monitor'] ?? [];
+
+            return new SessionBeacon(
+                $app->make(MonitorClient::class),
+                (string) ($config['release'] ?? ''),
             );
         });
 
@@ -81,6 +126,8 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
     {
         $this->registerSlowQueryCapture();
         $this->registerJobCapture();
+        $this->registerSpanCapture();
+        $this->registerHttpMiddleware();
     }
 
     /**
@@ -145,5 +192,76 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
         Event::listen(WorkerStopping::class, function (): void {
             app(JobCapture::class)->flushAll();
         });
+
+        // Scheduled runs (v2, nightpost#9): the scheduler's events are the only
+        // place that holds the expression a run belongs to, so the promise is
+        // read here and attached to the run's /job row — next run included.
+        Event::listen(ScheduledTaskStarting::class, function (ScheduledTaskStarting $event): void {
+            app(JobCapture::class)->scheduledStarted(SchedulePromise::fromScheduledEvent($event->task));
+        });
+        Event::listen(ScheduledTaskFinished::class, function (ScheduledTaskFinished $event): void {
+            app(JobCapture::class)->scheduledDone(
+                SchedulePromise::fromScheduledEvent($event->task)->name(),
+                (float) $event->runtime,
+                true,
+            );
+        });
+        Event::listen(ScheduledTaskFailed::class, function (ScheduledTaskFailed $event): void {
+            app(JobCapture::class)->scheduledDone(
+                SchedulePromise::fromScheduledEvent($event->task)->name(),
+                0.0,
+                false,
+            );
+        });
+    }
+
+    /**
+     * Register the v2 child-span capture (nightpost#9). OFF by default: these
+     * listeners fire on EVERY query and every outbound call, so an install that
+     * does not want span waterfalls must not pay for them.
+     */
+    public function registerSpanCapture(): void
+    {
+        if (! config('monitor.enabled') || ! config('monitor.spans')) {
+            return;
+        }
+
+        DB::listen(function (QueryExecuted $event): void {
+            app(SpanCollector::class)->query($event);
+        });
+        Event::listen(CommandExecuted::class, function (CommandExecuted $event): void {
+            app(SpanCollector::class)->redis($event);
+        });
+        Event::listen(RequestSending::class, function (RequestSending $event): void {
+            app(SpanCollector::class)->sending($event);
+        });
+        Event::listen(ResponseReceived::class, function (ResponseReceived $event): void {
+            app(SpanCollector::class)->received($event);
+        });
+        Event::listen(ConnectionFailed::class, function (ConnectionFailed $event): void {
+            app(SpanCollector::class)->failed($event);
+        });
+    }
+
+    /**
+     * Register the v2 HTTP middleware (nightpost#9): the traceparent lifecycle
+     * runs first so every later middleware inherits the context, and the
+     * session beacon runs last so it reports the status the client received.
+     */
+    public function registerHttpMiddleware(): void
+    {
+        if (! config('monitor.enabled') || ! $this->app->bound(\Illuminate\Contracts\Http\Kernel::class)) {
+            return;
+        }
+
+        $kernel = $this->app->make(\Illuminate\Contracts\Http\Kernel::class);
+        if (! method_exists($kernel, 'prependMiddleware')) {
+            return;
+        }
+
+        $kernel->prependMiddleware(TraceContextMiddleware::class);
+        if (config('monitor.session_beacon')) {
+            $kernel->pushMiddleware(SessionBeaconMiddleware::class);
+        }
     }
 }

@@ -43,6 +43,12 @@ final class JobCapture
     /** @var array<string, string> job id => trace id minted at start */
     private array $traces = [];
 
+    /** @var array<string, float> scheduled task name => start microtime */
+    private array $scheduled = [];
+
+    /** @var array<string, SchedulePromise> scheduled task name => the promise it makes (v2) */
+    private array $promises = [];
+
     private int $runDepth = 0;
 
     private string $activeTrace = '';
@@ -93,7 +99,47 @@ final class JobCapture
         $this->record('command', $command, '', $seconds, $ok, $trace);
     }
 
-    public function record(string $kind, string $name, string $queue, float $seconds, bool $ok, string $trace = ''): void
+    /**
+     * Open one scheduled task (v2, nightpost#9). The scheduler's own events are
+     * the only place that knows which expression a run belongs to, so the
+     * promise is remembered here and attached to the run's /job row when it
+     * completes; a task that never opens records without one rather than
+     * inventing an expectation.
+     */
+    public function scheduledStarted(SchedulePromise $promise): void
+    {
+        $name = $promise->name();
+        if ($name === '') {
+            return;
+        }
+        if (count($this->scheduled) >= self::MAX_STARTED) {
+            $this->scheduled = array_slice($this->scheduled, intdiv(self::MAX_STARTED, 2), null, true);
+        }
+        $this->scheduled[$name] = microtime(true);
+
+        if (count($this->promises) >= self::MAX_BUCKETS) {
+            $this->promises = array_slice($this->promises, intdiv(self::MAX_BUCKETS, 2), null, true);
+        }
+        $this->promises[$name] = $promise;
+    }
+
+    /**
+     * Close one scheduled task. The framework's own runtime wins when it has
+     * one; a failure carries no runtime, so the measured span fills in.
+     */
+    public function scheduledDone(string $name, float $runtimeSeconds, bool $ok): void
+    {
+        $start = $this->scheduled[$name] ?? null;
+        unset($this->scheduled[$name]);
+
+        $seconds = $runtimeSeconds > 0.0
+            ? $runtimeSeconds
+            : ($start === null ? 0.0 : max(0.0, microtime(true) - $start));
+
+        $this->record('command', $name, '', $seconds, $ok, '', $this->promises[$name] ?? null);
+    }
+
+    public function record(string $kind, string $name, string $queue, float $seconds, bool $ok, string $trace = '', ?SchedulePromise $promise = null): void
     {
         if ($name === '') {
             return;
@@ -102,7 +148,7 @@ final class JobCapture
             return; // under the floor fast successes are not news; failures always report
         }
         if ($kind === 'command') {
-            $this->send($kind, $name, $queue, $seconds, $ok, 1, $trace);
+            $this->send($kind, $name, $queue, $seconds, $ok, 1, $trace, $promise);
 
             return;
         }
@@ -342,7 +388,7 @@ final class JobCapture
         return (int) Cache::increment($key) <= $this->profileCap;
     }
 
-    private function send(string $kind, string $name, string $queue, float $seconds, bool $ok, int $count, string $trace = ''): void
+    private function send(string $kind, string $name, string $queue, float $seconds, bool $ok, int $count, string $trace = '', ?SchedulePromise $promise = null): void
     {
         $payload = [
             'name' => $name,
@@ -354,6 +400,13 @@ final class JobCapture
         ];
         if ($trace !== '') {
             $payload['trace'] = $trace;
+        }
+        if ($promise !== null && $promise->cron() !== '') {
+            // The promise the schedule made (v2): optional on the wire, so an
+            // install that never registers a schedule sends the v1 row.
+            $payload['schedule_cron'] = $promise->cron();
+            $payload['next_expected_at'] = $promise->nextExpectedAt();
+            $payload['grace_seconds'] = $promise->graceSeconds();
         }
         $this->client->postJob($payload);
     }

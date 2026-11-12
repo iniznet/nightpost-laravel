@@ -44,4 +44,18 @@ return [
     'job_profile_seconds' => (float) $env('JOB_PROFILE_SECONDS', 0),
     'job_profile_cap' => (int) $env('JOB_PROFILE_CAP', 2),
     'job_window_seconds' => (float) $env('JOB_WINDOW_SECONDS', 60),
+    // Producer identity (v2, nightpost#9): the service name every payload
+    // reports as. Empty = the slug of APP_NAME, so an install that configures
+    // nothing still names itself instead of arriving anonymous. The environment
+    // half of the identity is always the running app environment.
+    'service' => $env('SERVICE', ''),
+    // Release marker shipped with each session beacon (a deploy id, e.g. a tag).
+    'release' => $env('RELEASE', ''),
+    // Session outcome beacon (v2): one POST per session that ends. Needs a
+    // session driver; a request without a session is skipped, never invented.
+    'session_beacon' => (bool) $env('SESSION_BEACON', false),
+    // Child spans on a request profile (v2): one for database work, one for
+    // Redis, one per outbound HTTP call. OFF by default — the listeners fire on
+    // every query, so the cost must be asked for.
+    'spans' => (bool) $env('SPANS', false),
 ];

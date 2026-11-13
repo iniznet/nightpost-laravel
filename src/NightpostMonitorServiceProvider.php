@@ -118,6 +118,17 @@ class NightpostMonitorServiceProvider extends \Illuminate\Support\ServiceProvide
                 (float) ($config['job_min_seconds'] ?? 0),
                 (float) ($config['job_profile_seconds'] ?? 0),
                 (int) ($config['job_profile_cap'] ?? 2),
+                // Span sampling (nightpost#4): the collector is scoped, so it
+                // must be resolved at run start, never captured here — a
+                // captured instance would belong to whichever job ran first.
+                spanRate: (float) ($config['job_span_rate'] ?? 0),
+                beginSpans: static function (string $trace) use ($app): void {
+                    $collector = $app->make(SpanCollector::class);
+                    if (! $collector->active()) {
+                        $collector->begin();
+                    }
+                },
+                spanCap: (int) ($config['job_span_cap'] ?? 200),
             );
         });
     }

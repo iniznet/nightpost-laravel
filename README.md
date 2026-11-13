@@ -25,6 +25,8 @@ The service provider auto-discovers. Configure the senders you want:
 | NIGHTPOST_SLOW_QUERY_MS | slow-query capture threshold; 0 (default) = off |
 | NIGHTPOST_JOB_CAPTURE | job/command telemetry; off by default, zero overhead when off |
 | NIGHTPOST_JOB_PROFILE_SECONDS | per-run trace enrolment threshold (#203); 0 = off |
+| NIGHTPOST_JOB_SPAN_RATE | fraction of runs whose profile carries child spans (nightpost#4); 0 = off, default 0.002 |
+| NIGHTPOST_JOB_SPAN_CAP | per-worker hourly cap on span-profiled runs; default 200 |
 | NIGHTPOST_SERVICE | the service name every payload reports as (default: APP_NAME slug) |
 | NIGHTPOST_RELEASE | release marker shipped with each session beacon |
 | NIGHTPOST_SESSION_BEACON | session outcome beacon; needs a session driver, off by default |

@@ -20,6 +20,14 @@ use Illuminate\Support\Facades\Cache;
  * job payload arguments (which can carry reader data) are structurally
  * unreachable, the same posture as SlowQueryCapture's bindings-by-omission.
  *
+ * Span sampling (nightpost#4): a sampled root run opens the scoped
+ * SpanCollector, so the profile this class already emits for a slow or failed
+ * run carries the database, Redis and outbound-HTTP child spans that were
+ * recorded meanwhile — the waterfall a job row links to. Sampling is
+ * deterministic on the run's own trace id and capped per hour per worker, so a
+ * 2.8M-run-a-day queue cannot turn into 2.8M span profiles. An unsampled run
+ * behaves exactly as before: no collector opened, the v1 payload unchanged.
+ *
  * Queue events window per (kind|name): a retry storm costs ONE POST per
  * window with the batch size in "count" (the monitor adds counts
  * atomically). Commands flush immediately because schedule:run is a
@@ -55,6 +63,11 @@ final class JobCapture
 
     private bool $profiling = false;
 
+    /** Hour bucket the span sampler counts into, and runs opened within it. */
+    private int $spanHour = -1;
+
+    private int $spanUsed = 0;
+
     /**
      * The three profiling closures exist so the enable/disable/shipping
      * machinery is testable without the extension: production passes null
@@ -71,6 +84,9 @@ final class JobCapture
         private readonly ?\Closure $startProfiling = null,
         private readonly ?\Closure $stopProfiling = null,
         private readonly ?\Closure $shipCallgraph = null,
+        private readonly float $spanRate = 0.0,
+        private readonly ?\Closure $beginSpans = null,
+        private readonly int $spanCap = 200,
     ) {}
 
     public function jobStarted(string $jobId): void
@@ -259,11 +275,50 @@ final class JobCapture
             return $this->activeTrace;
         }
         $this->activeTrace = bin2hex(random_bytes(16));
+        $this->armSpans($this->activeTrace);
         if ($this->profileSeconds > 0 && $this->reserveCapSlot()) {
             $this->profiling = $this->startXhprof();
         }
 
         return $this->activeTrace;
+    }
+
+    /**
+     * Decide once per root run whether this run's profile carries child
+     * spans, and open the collector when it does.
+     *
+     * Deterministic, not random: the same trace id always lands the same way,
+     * so a replayed run reproduces its own payload. The hourly cap is per
+     * worker process — a bound on memory and on POSTs, not a global quota;
+     * the monitor's own admission is the global one.
+     */
+    private function armSpans(string $trace): void
+    {
+        if ($this->spanRate <= 0.0 || $this->beginSpans === null) {
+            return;
+        }
+        $hour = intdiv(time(), 3600);
+        if ($hour !== $this->spanHour) {
+            $this->spanHour = $hour;
+            $this->spanUsed = 0;
+        }
+        if ($this->spanUsed >= $this->spanCap) {
+            return;
+        }
+        if ($this->sampled($trace)) {
+            $this->spanUsed++;
+            ($this->beginSpans)($trace);
+        }
+    }
+
+    private function sampled(string $trace): bool
+    {
+        if ($this->spanRate >= 1.0) {
+            return true;
+        }
+        $bucket = crc32($trace) / 4294967295.0; // crc32 spans [0, 2^32-1]
+
+        return $bucket < $this->spanRate;
     }
 
     /**

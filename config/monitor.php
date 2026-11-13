@@ -42,6 +42,14 @@ return [
     // above the threshold - and every failure - emit a timing profile leg
     // under a fresh per-run trace id, and the /jobs row links to that trace.
     'job_profile_seconds' => (float) $env('JOB_PROFILE_SECONDS', 0),
+    // Child spans on job profiles (nightpost#4): a sampled run opens the span
+    // collector, so its profile carries database / Redis / outbound-HTTP spans
+    // and the dashboard can waterfall one run. Deterministic on the run's trace
+    // id; 0 (default) = off, every run sends the v1 payload it always did.
+    'job_span_rate' => (float) $env('JOB_SPAN_RATE', 0.002),
+    // Per-worker hourly cap on span-profiled runs, so a queue that runs
+    // millions of times a day cannot turn into millions of span profiles.
+    'job_span_cap' => (int) $env('JOB_SPAN_CAP', 200),
     'job_profile_cap' => (int) $env('JOB_PROFILE_CAP', 2),
     'job_window_seconds' => (float) $env('JOB_WINDOW_SECONDS', 60),
     // Producer identity (v2, nightpost#9): the service name every payload

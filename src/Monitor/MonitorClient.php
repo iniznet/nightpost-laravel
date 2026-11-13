@@ -12,11 +12,19 @@ namespace Nightpost\Laravel\Monitor;
  */
 class MonitorClient implements ProfileSender
 {
+    /**
+     * $identity and $profileSpans are optional so a hand-built client (a test,
+     * a one-off script) keeps the pre-v2 payload exactly: without an identity
+     * no service/env key is added, and without a span collector no traceparent
+     * or spans[] is attached.
+     */
     public function __construct(
         private readonly string $baseUrl,
         private readonly string $projectKey,
         private readonly int $timeoutMs = 300,
         private readonly string $ingestKey = '',
+        private readonly ?ServiceIdentity $identity = null,
+        private readonly ?\Closure $profileSpans = null,
     ) {}
 
     /**
@@ -40,6 +48,9 @@ class MonitorClient implements ProfileSender
 
     public function postProfile(array $payload): void
     {
+        if ($this->profileSpans !== null) {
+            $payload = ($this->profileSpans)($payload);
+        }
         $this->post('/ingest/'.$this->projectKey.'/profile', $payload);
     }
 
@@ -76,10 +87,28 @@ class MonitorClient implements ProfileSender
     }
 
     /**
+     * Ship one session outcome beacon (v2, nightpost#9). The monitor is
+     * idempotent on (project, session_id), so a retry is safe.
+     *
+     * @param array<string, mixed> $payload
+     */
+    public function postSession(array $payload): void
+    {
+        $this->post('/ingest/'.$this->projectKey.'/session', $payload);
+    }
+
+    /**
      * @param array<string, mixed> $payload
      */
     private function post(string $path, array $payload): void
     {
+        // Producer identity (v2): every payload names the service that sent it
+        // and the environment it ran in. Additive — the monitor ignores these
+        // keys until it knows them (tolerant reader), so a v1 body stays valid.
+        if ($this->identity !== null) {
+            $payload = $this->identity->decorate($payload);
+        }
+
         $ch = curl_init(rtrim($this->baseUrl, '/').$path);
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
